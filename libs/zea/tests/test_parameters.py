@@ -1,0 +1,542 @@
+"""Tests for the BaseParameters base class.
+
+This test suite verifies the following features of the BaseParameters system:
+
+- Type validation and error handling for parameter assignment
+- Dependency tracking and lazy computation of properties
+- Cache invalidation and recomputation on parameter change
+- Restriction to setting only leaf parameters (not computed properties)
+- Informative error messages for missing dependencies
+- Tensor conversion of parameters and computed properties
+
+"""
+
+import time
+
+import keras
+import numpy as np
+import pytest
+
+from zea.internal.parameters import (
+    BaseParameters,
+    MissingDependencyError,
+    cache_with_dependencies,
+)
+
+
+class DummyCircularParameters(BaseParameters):
+    """A simple test class with a circular dependency."""
+
+    VALID_PARAMS = {
+        "param1": {"dtype": int},
+    }
+
+    @cache_with_dependencies("param1", "computed2")
+    def computed1(self):
+        return self.computed2 + self.param1
+
+    @cache_with_dependencies("computed1")
+    def computed2(self):
+        return self.computed1
+
+
+class DummyInvalidParameters(BaseParameters):
+    """A simple test class with an invalid parameter type."""
+
+    VALID_PARAMS = {
+        "param1": {"dtype": int},
+    }
+
+    @cache_with_dependencies("param1")
+    def computed1(self):
+        return self.param1 * 2
+
+    @cache_with_dependencies("non_existing_dependency")  # Invalid dependency
+    def computed2(self):
+        return self.computed1
+
+
+class DummyParameters(BaseParameters):
+    """A simple test class with parameters and computed properties.
+
+    This class is used for testing the Parameter framework with simple
+    dependencies between properties.
+
+    Args:
+        param1: First parameter (equivalent to grid_size_x in the original)
+        param2: Second parameter (equivalent to grid_size_z in the original)
+        param3: Third parameter with default value (like sound_speed)
+        param4: Fourth parameter (like sampling_frequency)
+        param5: Optional fifth parameter
+        param6: Optional sixth parameter
+        optional_param: Optional parameter that can be set directly or computed from dependencies
+
+    Attributes:
+        computed1: A computed property depending on param1 and param2
+        computed2: A computed property depending on computed1
+        computed3: A computed property depending on param3 and param4
+        optional_param: A property that is either set directly or computed from dependencies
+    """
+
+    VALID_PARAMS = {
+        "param1": {"dtype": np.int32},
+        "param2": {"dtype": np.int32},
+        "param3": {"dtype": np.float32, "default": 1540.0},
+        "param4": {"dtype": np.float32},
+        "param5": {"dtype": np.float32},
+        "param6": {"dtype": np.float32},
+        "optional_param": {"dtype": np.int32},
+    }
+
+    def _timestamp(self):
+        return time.time()
+
+    @cache_with_dependencies("param1", "param2")
+    def computed1(self):
+        # Use a call counter for robust cache testing
+        if not hasattr(self, "_computed1_count"):
+            self._computed1_count = 0
+        self._computed1_count += 1
+        p1, p2 = self.param1, self.param2
+        return np.meshgrid(np.arange(p1), np.arange(p2), indexing="ij")
+
+    @cache_with_dependencies("computed1")
+    def computed2(self):
+        if not hasattr(self, "_computed2_count"):
+            self._computed2_count = 0
+        self._computed2_count += 1
+        x, z = self.computed1
+        dx = np.mean(np.diff(x[:, 0]))
+        dz = np.mean(np.diff(z[0, :]))
+        return dx, dz
+
+    @cache_with_dependencies("param3", "param4")
+    def computed3(self):
+        if not hasattr(self, "_computed3_count"):
+            self._computed3_count = 0
+        self._computed3_count += 1
+        return self.param3 / self.param4
+
+    @cache_with_dependencies("param3", "param1", "param4")
+    def optional_param(self):
+        # Use the underlying param if set
+        if self._params.get("optional_param", None) is not None:
+            return self._params["optional_param"]
+        # Otherwise, compute from dependencies
+        if None in (self.param3, self.param1, self.param4):
+            raise MissingDependencyError("Missing dependencies for optional_param")
+        return [0, self.param3 * self.param1 / self.param4 / 2]
+
+    @cache_with_dependencies("optional_param", "param6")
+    def dependent_on_optional(self):
+        # If optional_param is set, use it, else use computed value
+        base = self.optional_param
+        if self.param6 is None:
+            raise MissingDependencyError("Missing dependency: param6")
+        # Just for test: sum the second value of optional_param and param6
+        return base[1] + self.param6
+
+
+class DummyArrayParameters(BaseParameters):
+    """Minimal class for testing ndarray handling in BaseParameters.update()."""
+
+    VALID_PARAMS = {
+        "arr": {"dtype": np.ndarray},
+    }
+
+    @cache_with_dependencies("arr")
+    def arr_sum(self):
+        if not hasattr(self, "_arr_sum_count"):
+            self._arr_sum_count = 0
+        self._arr_sum_count += 1
+        return np.sum(self.arr)
+
+
+class DummyObjectParameters(BaseParameters):
+    """Minimal class for testing non-ndarray equality handling in update()."""
+
+    VALID_PARAMS = {
+        "obj": {"dtype": object},
+    }
+
+    @cache_with_dependencies("obj")
+    def marker(self):
+        if not hasattr(self, "_marker_count"):
+            self._marker_count = 0
+        self._marker_count += 1
+        return self._marker_count
+
+
+@pytest.fixture
+def dummy_params():
+    """Fixture for a fresh DummyParameters instance with required params."""
+    return DummyParameters(param1=5, param2=10, param3=1500.0, param4=5e6)
+
+
+def test_catch_circular_dependency():
+    """Test that circular dependencies raise an error."""
+    with pytest.raises(RuntimeError, match="Circular dependency detected"):
+        DummyCircularParameters(param1=5)
+
+
+def test_catch_invalid_dependency():
+    """Test that invalid dependencies raise an error."""
+    with pytest.raises(ValueError):
+        DummyInvalidParameters(param1=5)
+
+
+def test_type_validation_on_init():
+    """Unknown params become custom passthrough; known params are still type-checked."""
+    # Unknown parameter is stored as a custom (passthrough) parameter, not rejected.
+    p = DummyParameters(param1=1, param2=2, invalid_param=3)
+    assert p.invalid_param == 3
+    assert "invalid_param" not in p._params
+    assert p._custom_params["invalid_param"] == 3
+    # Known parameters with the wrong type still raise.
+    with pytest.raises(TypeError, match="param4.*float"):
+        DummyParameters(param1=1, param2=2, param3=1500.0, param4="not_a_float")
+
+
+def test_type_validation_on_set(dummy_params):
+    """Setting an unknown attribute stores it as a custom parameter (no error)."""
+    dummy_params.invalid_param = 42
+    assert dummy_params.invalid_param == 42
+    assert dummy_params._custom_params["invalid_param"] == 42
+    with pytest.raises(TypeError, match="param3.*float"):
+        dummy_params.param3 = "not_a_float"
+
+
+def test_dependency_tracking_and_lazy_computation(dummy_params):
+    """Test that computed properties are lazily evaluated and cached."""
+    # Access computed1 and check it is computed
+    _ = dummy_params.computed1
+    assert dummy_params._computed1_count == 1
+    # Access again, should not recompute
+    _ = dummy_params.computed1
+    assert dummy_params._computed1_count == 1
+    # Changing a dependency invalidates cache
+    dummy_params.param1 = 6
+    _ = dummy_params.computed1
+    assert dummy_params._computed1_count == 2
+
+
+def test_chain_dependency_and_cache(dummy_params):
+    """Test that chained dependencies are resolved and cached correctly."""
+    _ = dummy_params.computed2
+    assert dummy_params._computed1_count == 1
+    assert dummy_params._computed2_count == 1
+    # Changing a leaf param invalidates all dependents
+    dummy_params.param2 = 11
+    _ = dummy_params.computed1
+    _ = dummy_params.computed2
+    assert dummy_params._computed1_count == 2
+    assert dummy_params._computed2_count == 2  # fails here
+    _ = dummy_params.computed1
+    _ = dummy_params.computed2
+    # However, when accessing computed1 and 2 again, without
+    # changing any leaf params, they should not recompute
+    assert dummy_params._computed1_count == 2
+    assert dummy_params._computed2_count == 2
+
+
+def test_setting_computed_property_raises(dummy_params):
+    """Test that setting a computed property raises informative MissingDependencyError."""
+    with pytest.raises(ValueError) as excinfo:
+        dummy_params.computed1 = 123
+    msg = str(excinfo.value)
+    assert "Cannot set computed property 'computed1'" in msg
+    assert "param1" in msg and "param2" in msg
+
+
+def test_missing_dependency_error_message():
+    """Test that missing dependencies raise informative errors."""
+    s = DummyParameters()
+    with pytest.raises(MissingDependencyError) as excinfo:
+        _ = s.computed2
+    msg = str(excinfo.value)
+    assert "param1" in msg and "param2" in msg
+
+
+def test_to_tensor_includes_all(dummy_params: DummyParameters):
+    """Test that to_tensor includes all parameters and computed properties."""
+    tensors = dummy_params.to_tensor()
+    # Should include all direct params and computed1, computed2, computed3
+    for key in [
+        "param1",
+        "param2",
+        "param3",
+        "param4",
+        "computed1",
+        "computed2",
+        "computed3",
+    ]:
+        assert key in tensors
+    # Check tensor value for computed3
+    assert np.isclose(
+        float(keras.ops.convert_to_numpy(tensors["computed3"])),
+        dummy_params.param3 / dummy_params.param4,
+    )
+
+
+def test_to_tensor_excludes(dummy_params: BaseParameters):
+    """Test that to_tensor excludes specified keys."""
+    # Exclude computed1 and param2
+    tensors = dummy_params.to_tensor(exclude=["computed1", "param2"])
+    assert "computed1" not in tensors
+    assert "param2" not in tensors
+    # Should still include other params and computed properties
+    for key in ["param1", "param3", "param4", "computed2", "computed3"]:
+        assert key in tensors
+
+    # Exclude a non-existent key, should not raise error
+    dummy_params.to_tensor(exclude=["non_existent"])
+
+
+def test_to_tensor_partial_computed_subset(dummy_params):
+    """Test that to_tensor only computes the requested subset."""
+    # Access no computed properties yet
+    tensors = dummy_params.to_tensor(include=["computed1"])
+    # Only computed1 should be present (besides direct params)
+    assert "computed1" in tensors
+    assert "computed2" not in tensors
+    assert "computed3" not in tensors
+    # Now try with multiple keys
+    tensors2 = dummy_params.to_tensor(include=["computed1", "computed3"])
+    assert "computed1" in tensors2
+    assert "computed3" in tensors2
+    assert "computed2" not in tensors2
+    # If a key is not a computed property, it should be ignored (no error)
+    tensors3 = dummy_params.to_tensor(include=["computed1", "param1"])
+    assert "computed1" in tensors3
+    assert "param1" in tensors3
+
+    # An empty include list should not return an empty dict, since no keys are specified.
+    tensors4 = dummy_params.to_tensor(include=[])
+    assert set(tensors4.keys()) != {
+        "param1",
+        "param2",
+        "param3",
+        "param4",
+        "computed1",
+        "computed3",
+    }
+
+    # Access computed2 manually
+    _ = dummy_params.computed2
+    # Now call to_tensor with include requesting computed2
+    tensors5 = dummy_params.to_tensor(include=["computed2"])
+    # It should be present, and should not be recomputed (counter stays the same)
+    assert "computed2" in tensors5
+    count = dummy_params._computed2_count
+    _ = dummy_params.to_tensor(include=["computed2"])
+    assert dummy_params._computed2_count == count  # No recompute
+
+
+def test_repr_and_str(dummy_params):
+    """Test __repr__ and __str__ output for BaseParameters."""
+    r = repr(dummy_params)
+    s = str(dummy_params)
+    assert "DummyParameters" in r
+    assert "param1=" in r
+    assert "DummyParameters" in s
+    assert "param1=" in s
+
+
+def test_optional_param_leaf_or_dependency_behavior():
+    """Test that optional_param can be set as a leaf or computed as a dependency."""
+    # Case 1: optional_param provided, uses it directly
+    p = DummyParameters(param1=10, param2=5, param3=1500.0, param4=5e6, optional_param=[1, 2])
+    assert np.allclose(p.optional_param, [1, 2])
+
+    # Case 2: optional_param not provided, computed from dependencies
+    p2 = DummyParameters(param1=10, param2=5, param3=1500.0, param4=5e6)
+    expected = [0, 1500.0 * 10 / 5e6 / 2]
+    assert np.allclose(p2.optional_param, expected)
+
+    # Case 3: optional_param set after init, uses new value
+    p2.optional_param = [3, 4]
+    assert np.allclose(p2.optional_param, [3, 4])
+
+    # Case 4: delete optional_param, should fall back to computed value
+    del p2.optional_param
+    assert np.allclose(p2.optional_param, expected)
+
+
+def test_optional_parm_with_dependent_behavior():
+    """Test that dependent_on_optional behaves correctly with optional_param."""
+    # Case 1: optional_param provided, dependent uses it
+    p = DummyParameters(
+        param1=10,
+        param2=5,
+        param3=1500.0,
+        param4=5e6,
+        optional_param=[1, 2],
+        param6=7.0,
+    )
+    assert np.allclose(p.optional_param, [1, 2])
+    assert p.dependent_on_optional == 2 + 7.0
+
+    # Case 2: optional_param not provided, dependent uses computed value
+    p2 = DummyParameters(param1=10, param2=5, param3=1500.0, param4=5e6, param6=8.0)
+    expected = [0, 1500.0 * 10 / 5e6 / 2]
+    assert np.allclose(p2.optional_param, expected)
+    assert np.isclose(p2.dependent_on_optional, expected[1] + 8)
+
+    # Case 3: optional_param set after init, dependent uses new value
+    p2.optional_param = [3, 4]
+    assert np.allclose(p2.optional_param, [3, 4])
+    assert p2.dependent_on_optional == 4 + 8.0
+
+    # Case 4: delete optional_param, dependent falls back to computed
+    del p2.optional_param
+    assert np.allclose(p2.optional_param, expected)
+    assert np.isclose(p2.dependent_on_optional, expected[1] + 8)
+
+
+def test_update_skips_unchanged_values_keeps_cache(dummy_params):
+    """Test update skips equal values and keeps cached computed properties."""
+    _ = dummy_params.computed1
+    assert "computed1" in dummy_params._cache
+    cached_before = dummy_params._cache["computed1"]
+
+    dummy_params.update(param1=dummy_params.param1)
+    cached_after = dummy_params._cache["computed1"]
+    assert cached_after is cached_before
+    assert dummy_params._computed1_count == 1
+
+
+def test_update_force_invalidates_cache_even_when_value_unchanged(dummy_params):
+    """Test force=True invalidates dependents even when incoming value is unchanged."""
+    _ = dummy_params.computed1
+    assert "computed1" in dummy_params._cache
+
+    dummy_params.update(force=True, param1=dummy_params.param1)
+    assert "computed1" not in dummy_params._cache
+
+    _ = dummy_params.computed1
+    assert dummy_params._computed1_count == 2
+
+
+def test_update_with_changed_value_invalidates_cache(dummy_params):
+    """Test update invalidates cached dependents when a value changes."""
+    _ = dummy_params.computed3
+    assert "computed3" in dummy_params._cache
+
+    dummy_params.update(param4=dummy_params.param4 * 1.01)
+    assert "computed3" not in dummy_params._cache
+
+
+def test_update_stores_unknown_keys_as_custom(dummy_params):
+    """Test update stores unknown keys as custom (passthrough) parameters."""
+    dummy_params.update(non_existing_key=123)
+    assert dummy_params.non_existing_key == 123
+    assert dummy_params._custom_params["non_existing_key"] == 123
+    # Custom params are not treated as validated leaf params.
+    assert "non_existing_key" not in dummy_params._params
+
+
+def test_update_accepts_positional_mapping(dummy_params):
+    """update() accepts a positional mapping (e.g. config.parameters) like dict.update."""
+    # Positional mapping with both a validated param and a custom passthrough key.
+    dummy_params.update({"param1": 99, "custom_key": "hi"})
+    assert dummy_params.param1 == 99
+    assert dummy_params.custom_key == "hi"
+    # Keyword arguments take precedence over the positional mapping on collision.
+    dummy_params.update({"param1": 1}, param1=7)
+    assert dummy_params.param1 == 7
+
+
+def test_update_ndarray_equality_skips_recompute():
+    """Test update uses array equality and skips updates for equal ndarrays."""
+    params = DummyArrayParameters(arr=np.array([1.0, 2.0, 3.0]))
+    _ = params.arr_sum
+    assert "arr_sum" in params._cache
+    cached_before = params._cache["arr_sum"]
+
+    params.update(arr=np.array([1.0, 2.0, 3.0]))
+    assert params._cache["arr_sum"] is cached_before
+    assert params._arr_sum_count == 1
+
+    params.update(arr=np.array([1.0, 2.0, 4.0]))
+    assert "arr_sum" not in params._cache
+
+
+def test_update_array_equal_type_error_falls_through_to_setattr():
+    """Test update catches np.array_equal errors and still applies setattr."""
+
+    class _RaisesOnEq:
+        def __eq__(self, other):
+            raise TypeError("bad equality")
+
+    old_arr = np.array([_RaisesOnEq()], dtype=object)
+    new_arr = np.array([_RaisesOnEq()], dtype=object)
+    params = DummyArrayParameters(arr=old_arr)
+
+    # np.array_equal(old_arr, new_arr) raises TypeError, code should fall through
+    # and still set the new value.
+    params.update(arr=new_arr)
+    assert params.arr is new_arr
+
+
+def test_update_non_array_bool_equality_skips_update():
+    """Test non-ndarray bool equality path skips assignment."""
+    params = DummyObjectParameters(obj=42)
+    _ = params.marker
+    assert "marker" in params._cache
+    cached_before = params._cache["marker"]
+
+    params.update(obj=42)
+    assert params._cache["marker"] is cached_before
+    assert params._marker_count == 1
+
+
+def test_update_non_array_arraylike_equality_uses_np_all():
+    """Test non-ndarray equality returning array-like uses np.all(eq)."""
+
+    class _EqArrayLike:
+        def __eq__(self, other):
+            return np.array([True, True], dtype=bool)
+
+    old_obj = _EqArrayLike()
+    new_obj = _EqArrayLike()
+    params = DummyObjectParameters(obj=old_obj)
+    _ = params.marker
+    cached_before = params._cache["marker"]
+
+    params.update(obj=new_obj)
+    assert params._cache["marker"] is cached_before
+    assert params._marker_count == 1
+
+
+def test_update_non_array_equality_exception_sets_value():
+    """Test non-ndarray equality exception path falls through to assignment."""
+
+    class _RaisesOnEq:
+        def __eq__(self, other):
+            raise TypeError("bad equality")
+
+    old_obj = _RaisesOnEq()
+    new_obj = _RaisesOnEq()
+    params = DummyObjectParameters(obj=old_obj)
+
+    params.update(obj=new_obj)
+    assert params.obj is new_obj
+
+
+def test_update_non_array_np_all_exception_falls_through():
+    """Test non-ndarray np.all(eq) exception path falls through to assignment."""
+
+    class _EqResultRaisesAll:
+        def __array__(self, dtype=None):
+            raise TypeError("cannot convert to array")
+
+    class _EqBadAll:
+        def __eq__(self, other):
+            return _EqResultRaisesAll()
+
+    old_obj = _EqBadAll()
+    new_obj = _EqBadAll()
+    params = DummyObjectParameters(obj=old_obj)
+
+    params.update(obj=new_obj)
+    assert params.obj is new_obj

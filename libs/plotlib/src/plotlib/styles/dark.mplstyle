@@ -1,0 +1,12 @@
+font.family: serif
+font.size: 12.0
+text.color: white
+axes.facecolor: black
+axes.edgecolor: white
+axes.titlesize: medium
+axes.labelcolor: "#BBBBBB"
+axes.prop_cycle: cycler('color', ['E02222', '0EA7FF', 'FFE70E', '67D627', '9467bd', '8c564b', 'e377c2', '7f7f7f', 'bcbd22', '17becf'])
+xtick.color: white
+ytick.color: white
+figure.facecolor: black
+image.interpolation: none

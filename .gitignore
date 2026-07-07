@@ -1,0 +1,43 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+# Data files
+*.npz
+*.npy
+*.hdf5
+*.sif
+*.tar
+*.zip
+*.nii
+*.gz
+*.mat
+*.csv
+*.tsv
+*.lock
+*.whl
+*.pth
+
+*.gif
+*.png
+*.log
+*.out
+*.pdf
+*.html
+
+.claude/
+
+# Folders
+
+out/
+source/
+
+!libs/imagelib/
+!libs/plotlib/
+!libs/latextoolkit/

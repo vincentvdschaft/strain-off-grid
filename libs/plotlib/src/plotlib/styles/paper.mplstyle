@@ -1,0 +1,28 @@
+font.family: serif
+font.size: 12.0
+axes.titlesize: small
+axes.titleweight: bold
+axes.titlepad: 3
+axes.labelsize: xx-small
+axes.labelpad: 2.0
+
+lines.markersize: 3.0
+
+xtick.major.size: 1.1
+ytick.major.size: 1.1
+
+xtick.minor.size: 0.6 
+ytick.minor.size: 0.6 
+
+xtick.labelsize: xx-small
+ytick.labelsize: xx-small
+
+legend.fontsize: 8
+legend.borderpad: 0.1
+legend.labelspacing: 0.05
+legend.handletextpad: 0.1
+legend.columnspacing: 1.0
+legend.frameon: false
+
+axes.prop_cycle: cycler('color', ['FF7F0E', '299FEE', '2CA02C', 'D62728', '9467BD', '8C564B', 'E377C2', '7F7F7F', 'BCBD22', '17BECF'])
+image.interpolation: none

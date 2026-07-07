@@ -1,0 +1,57 @@
+[project]
+name = "strain-off-grid"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Anonymous" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "h5py>=3.16.0",
+    "imagelib",
+    "jax[cuda12]>=0.10.2",
+    "latextoolkit",
+    "matplotlib>=3.11.0",
+    "napari>=0.7.1",
+    "numpy>=2.5.1",
+    "optax>=0.2.8",
+    "plotlib",
+    "pyqt6>=6.11.0",
+    "rich>=15.0.0",
+    "scipy>=1.18.0",
+    "storepari",
+    "ulmtools",
+    "zea",
+]
+
+[build-system]
+requires = ["uv_build>=0.11.8,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.workspace]
+members = [
+    "libs/imagelib",
+    "libs/plotlib",
+    "libs/latextoolkit",
+    "libs/zea",
+    "libs/storepari",
+]
+
+[tool.uv.sources]
+latextoolkit = { workspace = true }
+imagelib = { workspace = true }
+zea = { workspace = true }
+plotlib = { workspace = true }
+ulmtools = { path = "libs/ulmtools-0.1.1-cp37-abi3-manylinux_2_34_x86_64.whl" }
+storepari = { workspace = true }
+
+[project.scripts]
+solve = "strain_off_grid.cli.solve:main"
+make_cardiac_phantom = "strain_off_grid.cli.make_cardiac_phantom:main"
+simulate_phantom = "strain_off_grid.cli.simulate_phantom:main"
+evaluate_strain = "strain_off_grid.cli.evaluate_strain:main"
+evaluate_strain_invivo = "strain_off_grid.cli.evaluate_strain_invivo:main"
+plot_ring_strain_curves = "strain_off_grid.cli.plot_ring_strain_curves:main"
+plot_ischemic_maps = "strain_off_grid.cli.plot_ischemic_maps:main"
+plot_in_vivo = "strain_off_grid.cli.plot_in_vivo:main"
