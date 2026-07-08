@@ -22,9 +22,9 @@ DAS_PATH = "out/sweep/ischemic_00/simulated_phantom_ischemic-000.hdf5"
 STRAIN_CMAP = "coolwarm"
 CONTRAST_FRACTION = 0.8
 METHODS = [
-    ("Ground truth", "ground_truth", "C2"),
-    ("CDT (proposed)", "solver", "C0"),
-    ("Speckle Tracking", "baseline", "C1"),
+    ("CDT (proposed)", "solver", "C0", "-x"),
+    ("Speckle Tracking", "baseline", "C1", "-o"),
+    ("Ground truth", "ground_truth", "C2", "--"),
 ]
 LIMITS = LimitsND((20e-3, 120e-3, -45e-3, 45e-3))
 
@@ -41,7 +41,9 @@ def parse_arguments() -> argparse.Namespace:
 
 def load_strain_images(path: Path) -> dict[str, Image]:
     """Load the strain-rate map of every method from an hdf5 file."""
-    return {label: Image.load(path, group=f"/{group}") for label, group, _ in METHODS}
+    return {
+        label: Image.load(path, group=f"/{group}") for label, group, _, _ in METHODS
+    }
 
 
 def load_das_image(path: str, plane_limits) -> Image:
@@ -256,7 +258,7 @@ def plot_curves_at_location(
     )
     lines = []
     ground_truth_curve = strain_rate_curve(images["Ground truth"], phantom, location)
-    for label, _, color in METHODS:
+    for label, _, color, line_style in METHODS:
         curve = strain_rate_curve(images[label], phantom, location)
         if label != "Ground truth":
             register_table_result(
@@ -266,7 +268,15 @@ def plot_curves_at_location(
                 mean=float(np.nanmean(np.abs(curve - ground_truth_curve))),
                 std=float(np.nanstd(np.abs(curve - ground_truth_curve))),
             )
-        (line,) = ax.plot(time, curve, label=label, color=color, linewidth=0.8)
+        (line,) = ax.plot(
+            time,
+            curve,
+            line_style,
+            label=label,
+            color=color,
+            linewidth=0.7,
+            markersize=1,
+        )
         lines.append(line)
     return lines
 
@@ -277,7 +287,10 @@ def draw_top_row(figure, layout, das_image, strain_frames, phantom, vmax) -> lis
     show_grayscale(top_axes[0], das_image)
     draw_phantom_boxes(top_axes[0], phantom)
     top_axes[0].set_title("B-mode", fontsize=7)
-    for ax, (label, _, color) in zip(top_axes[1:], METHODS):
+
+    for ax, (label, _, color, _) in zip(
+        np.array(top_axes[1:])[np.array((1, 2, 0))], METHODS
+    ):
         show_strain_map(ax, strain_frames[label], vmax)
         ax.set_title(label, fontsize=7)
     return top_axes

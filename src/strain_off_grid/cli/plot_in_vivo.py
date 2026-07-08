@@ -1,5 +1,7 @@
+from copy import deepcopy
 from pathlib import Path
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 from imagelib import Image, Limits, LimitsND
@@ -13,6 +15,32 @@ from plotlib import (
     remove_internal_ticks,
     use_style,
 )
+
+
+def _masked_map(strain_rate_map: Image, im_das: Image, vmin, vmax) -> np.ndarray:
+    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    cmap = plt.get_cmap("coolwarm")
+    im_das_smooth = (
+        (
+            im_das.to_pixels()
+            .moving_average(window_size=10, ax=0)
+            .moving_average(window_size=10, ax=1)
+            .moving_average(window_size=10, ax=0)
+            .moving_average(window_size=10, ax=1)
+            .moving_average(window_size=10, ax=0)
+            .moving_average(window_size=10, ax=1)
+            * 2
+        )
+        .clip(0, 0.6)
+        .save_png("out/das_smooth.png")
+    )
+    im_das_smooth = im_das_smooth.resample_like(strain_rate_map)
+
+    colored_map = cmap(norm(strain_rate_map.array))
+
+    colored_map[..., 3] = im_das_smooth
+    colored_map[..., 3][np.isnan(strain_rate_map.array)] = 0
+    return colored_map
 
 
 def main():
@@ -103,12 +131,8 @@ def main():
         **shared_kwargs,
     )
     axes[0].imshow(
-        strain_map_solver.array,
+        _masked_map(strain_map_solver, deepcopy(im_das), -vmax, vmax),
         extent=strain_map_solver.extent_imshow,
-        cmap="coolwarm",
-        alpha=alpha,
-        vmin=-vmax,
-        vmax=vmax,
         **shared_kwargs,
     )
 
@@ -121,11 +145,8 @@ def main():
         **shared_kwargs,
     )
     axes[1].imshow(
-        strain_map_baseline.array,
+        _masked_map(strain_map_baseline, deepcopy(im_das), -vmax, vmax),
         cmap="coolwarm",
-        vmin=-vmax,
-        vmax=vmax,
-        alpha=alpha,
         extent=strain_map_baseline.extent_imshow,
         **shared_kwargs,
     )

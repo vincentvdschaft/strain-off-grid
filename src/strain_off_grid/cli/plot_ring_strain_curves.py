@@ -118,10 +118,10 @@ def main():
             image_solver_d, image_baseline_d, image_true_d = direction_images
             ground_truth_curve = smoothed_strain_curve(image_true_d, phantom, x, y)
             location = f"{location_letter} {direction_label}"
-            for image, label in [
-                (image_solver_d, "CDT (proposed)"),
-                (image_baseline_d, "Speckle Tracking"),
-                (image_true_d, "Ground truth"),
+            for image, label, line_style in [
+                (image_solver_d, "CDT (proposed)", "-x"),
+                (image_baseline_d, "Speckle Tracking", "-o"),
+                (image_true_d, "Ground truth", "--"),
             ]:
                 curve_smoothed = smoothed_strain_curve(image, phantom, x, y)
                 if label != "Ground truth":
@@ -133,7 +133,14 @@ def main():
                     image_true.limits[0].max,
                     len(curve_smoothed),
                 )
-                (new_curve,) = ax.plot(t, curve_smoothed, label=label)
+                (new_curve,) = ax.plot(
+                    t,
+                    curve_smoothed,
+                    line_style,
+                    label=label,
+                    linewidth=0.7,
+                    markersize=1,
+                )
                 curves.append(new_curve)
 
     for col, (direction_label, _) in enumerate(directions):

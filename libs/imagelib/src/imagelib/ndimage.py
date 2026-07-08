@@ -397,6 +397,12 @@ class NDImage:
 
         return self._rewrap(new_data, limits)
 
+    def resample_like(self, other: NDImage, method="linear", fill_value=0) -> NDImage:
+        """Resample image to match the shape and limits of another image."""
+        return self.resample(
+            shape=other.shape, limits=other.limits, method=method, fill_value=fill_value
+        )
+
     def transpose(self, axes=None) -> NDImage:
         """Transpose the image."""
         if axes is None:
